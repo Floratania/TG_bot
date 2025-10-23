@@ -17,20 +17,36 @@ async def show_social_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         await update.callback_query.answer()
 
-
+from telegram import Update
+from telegram.ext import ContextTypes
+from keyboards import social_media_menu
+from db import SessionLocal 
+from storage import is_manager 
+# Нам не потрібен явний імпорт start_support, якщо ми покладаємося на ConversationHandler
+from handlers.support_handler import open_support_manager # Залишаємо для менеджера
 async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обробляє натискання кнопок головного меню."""
     text = update.message.text
+    telegram_id = update.message.from_user.id 
+    
+    is_mgr = False
+    db = SessionLocal()
+    try:
+        is_mgr = is_manager(db, telegram_id)
+    finally:
+        db.close()
 
     if text == "🌐 Наші соцмережі":
         await show_social_media(update, context)
         
     elif text == "💬 Підтримка":
-        # Викликаємо команду /support через бота
-        await update.message.reply_text("/support")
-        # Або краще - явно викликаємо обробник
-        from handlers.support_handler import start_support
-        await start_support(update, context)
+        if is_mgr:
+            # Для менеджера: відкриваємо панель чатів
+            await open_support_manager(update, context)
+        else:
+            # Для клієнта: просто відправляємо команду /support
+            # ConversationHandler у main.py підхопить цю команду
+            await update.message.reply_text("/support") # <--- КЛЮЧОВА ЗМІНА
         
     elif text == "❓ Часті питання":
         await update.message.reply_text("❓ Тут будуть часті питання...")

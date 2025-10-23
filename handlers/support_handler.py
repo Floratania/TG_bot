@@ -141,11 +141,11 @@ async def start_support(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         # Менеджери не можуть використовувати клієнтський чат
         if role in get_manager_roles() or telegram_id == SUPER_ADMIN_ID:
-            await update.message.reply_text(
-                "❌ Ця команда для клієнтів. Використовуйте /support_manager для роботи з чатами."
-            )
-            return ConversationHandler.END
-        
+            # === ЗМІНА: Перенаправляємо менеджера на Панель підтримки ===
+            print(f"🔄 Менеджер {telegram_id} спробував /support, перенаправляємо на панель.")
+            return await open_support_manager(update, context) 
+            # =========================================================
+
         # Перевіряємо чи є активний чат
         chat = get_support_chat_by_client_id(db, telegram_id)
         
@@ -174,6 +174,11 @@ async def client_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обробляє повідомлення від клієнта."""
     telegram_id = update.message.from_user.id
     message = update.message
+
+    # if message.text == "💬 Підтримка":
+    #     # Якщо це текст кнопки, ми просто виходимо зі стану, 
+    #     # дозволяючи наступному повідомленню бути першим питанням.
+    #     return IN_CHAT
     
     # Перевірка чи користувач є менеджером
     db_check = SessionLocal()
