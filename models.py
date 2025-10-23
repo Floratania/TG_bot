@@ -14,21 +14,33 @@ class TelegramUser(Base):
 
 from sqlalchemy import Column, Integer, String, Enum, Text, ForeignKey
 from sqlalchemy.sql import func
-from sqlalchemy.orm import declarative_base
+from sqlalchemy.orm import relationship, declarative_base
 from sqlalchemy.types import DateTime
-
-Base = declarative_base()
 
 class ChatMessage(Base):
     __tablename__ = "chat_messages"
 
     id = Column(Integer, primary_key=True)
-    client_id = Column(Integer, nullable=False)
-    manager_id = Column(Integer, nullable=True)
+    client_id = Column(BigInteger, nullable=False, index=True) # Telegram ID
+    manager_id = Column(BigInteger, nullable=True, index=True) # Telegram Manager ID
     sender = Column(Enum("client", "manager"), nullable=False)
     type = Column(Enum("text", "photo", "video", "document", "voice"), nullable=False)
     text = Column(Text, nullable=True)
     file_id = Column(String(255), nullable=True)
-    media_group_id = Column(String(255), nullable=True)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+    media_group_id = Column(String(255), nullable=True, index=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now()) # Відповідає timestamps()
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now()) # Відповідає timestamps()
+
+# НОВА МОДЕЛЬ: SupportChat для відстеження стану чату
+class SupportChat(Base):
+    __tablename__ = "support_chats"
+
+    client_id = Column(BigInteger, ForeignKey("telegram_users.telegram_id"), primary_key=True)
+    manager_id = Column(BigInteger, nullable=True) # Telegram ID призначеного менеджера
+    status = Column(Enum("open", "closed", "awaiting_manager"), default="awaiting_manager")
+    
+    # Зв'язок
+    client = relationship("TelegramUser", primaryjoin="SupportChat.client_id == TelegramUser.telegram_id", foreign_keys=[client_id], backref="support_chat")
+
+    last_client_message_at = Column(DateTime(timezone=True), server_default=func.now())
+    last_manager_message_at = Column(DateTime(timezone=True), nullable=True)
