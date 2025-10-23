@@ -1,7 +1,6 @@
 from telegram import Update
-from telegram.ext import ContextTypes, CallbackQueryHandler
+from telegram.ext import ContextTypes
 from keyboards import social_media_menu
-from handlers.support_handler import start_support  # <- додай цей рядок
 
 
 async def show_social_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -19,19 +18,26 @@ async def show_social_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.callback_query.answer()
 
 
-
-from telegram import Update
-from telegram.ext import ContextTypes
-from handlers.support_handler import start_support  # запускаємо support через /support
-# from handlers.start_handler import show_social_media
-
 async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обробляє натискання кнопок головного меню."""
     text = update.message.text
 
     if text == "🌐 Наші соцмережі":
         await show_social_media(update, context)
+        
     elif text == "💬 Підтримка":
-        # Імітуємо команду /support для запуску ConversationHandler
-        await context.bot.send_message(chat_id=update.effective_chat.id, text="/support")
+        # Викликаємо команду /support через бота
+        await update.message.reply_text("/support")
+        # Або краще - явно викликаємо обробник
+        from handlers.support_handler import start_support
+        await start_support(update, context)
+        
     elif text == "❓ Часті питання":
         await update.message.reply_text("❓ Тут будуть часті питання...")
+        
+    # Додайте інші кнопки меню тут
+    elif text == "🛒 Мої замовлення":
+        await update.message.reply_text("🛒 Функція в розробці...")
+        
+    elif text == "➕ Зробити замовлення":
+        await update.message.reply_text("➕ Функція в розробці...")
