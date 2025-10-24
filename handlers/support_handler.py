@@ -124,6 +124,7 @@ def format_chat_history(messages: List[ChatMessage]) -> str:
         else:
             time_str = 'Щойно'
         
+        
         history.append(f"`{time_str}` *{sender_label}:*\n{text}\n")
     
     return "\n".join(history)
@@ -174,12 +175,16 @@ async def client_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обробляє повідомлення від клієнта."""
     telegram_id = update.message.from_user.id
     message = update.message
-
-    # if message.text == "💬 Підтримка":
-    #     # Якщо це текст кнопки, ми просто виходимо зі стану, 
-    #     # дозволяючи наступному повідомленню бути першим питанням.
-    #     return IN_CHAT
     
+    # === НОВЕ ВИПРАВЛЕННЯ: Ігноруємо текст кнопки "Підтримка" ===
+    if message.text == "💬 Підтримка":
+        # Це повідомлення потрапило сюди після того, як /support встановив ASK_QUESTION.
+        # Ми повинні ігнорувати його і залишитися в стані ASK_QUESTION.
+        return ASK_QUESTION 
+    # =========================================================
+    
+    # Перевірка чи користувач є менеджером
+    # db_check = SessionLocal()
     # Перевірка чи користувач є менеджером
     db_check = SessionLocal()
     try:

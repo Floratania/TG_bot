@@ -44,9 +44,8 @@ async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # Для менеджера: відкриваємо панель чатів
             await open_support_manager(update, context)
         else:
-            # Для клієнта: просто відправляємо команду /support
-            # ConversationHandler у main.py підхопить цю команду
-            await update.message.reply_text("/support") # <--- КЛЮЧОВА ЗМІНА
+            # Для клієнта: відправляємо команду /support. ConversationHandler підхопить її.
+            await update.message.reply_text("/support") 
         
     elif text == "❓ Часті питання":
         await update.message.reply_text("❓ Тут будуть часті питання...")
