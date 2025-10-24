@@ -159,7 +159,7 @@ def get_chat_history(db: Session, client_id: int, limit: int = 50) -> List[ChatM
     messages = db.query(ChatMessage).filter(
         ChatMessage.client_id == client_id
     ).order_by(
-        ChatMessage.created_at.asc()
+        ChatMessage.created_at.desc()
     ).limit(limit).all()
     
     print(f"📚 Завантажено {len(messages)} повідомлень для клієнта {client_id}")
