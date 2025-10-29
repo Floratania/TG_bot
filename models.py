@@ -15,6 +15,8 @@ class TelegramUser(Base):
     temp_code = Column(BigInteger, nullable=True)
 
 
+from sqlalchemy.dialects.mysql import TIMESTAMP
+
 class ChatMessage(Base):
     __tablename__ = "chat_messages"
 
@@ -26,19 +28,17 @@ class ChatMessage(Base):
     text = Column(Text, nullable=True)
     file_id = Column(String(255), nullable=True)
     media_group_id = Column(String(255), nullable=True, index=True)
-    
-    # ВИПРАВЛЕНО: додано default для Python + server_default для MySQL
+
     created_at = Column(
-        DateTime(timezone=True),
-        default=datetime.utcnow,
-        server_default=func.now(),
-        nullable=False
+        TIMESTAMP,
+        nullable=False,
+        server_default=func.current_timestamp()
     )
     updated_at = Column(
-        DateTime(timezone=True),
-        default=datetime.utcnow,
-        onupdate=datetime.utcnow,
-        server_default=func.now()
+        TIMESTAMP,
+        nullable=False,
+        server_default=func.current_timestamp(),
+        onupdate=func.current_timestamp()
     )
 
 

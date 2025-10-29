@@ -3,9 +3,10 @@ from models import TelegramUser, ChatMessage, SupportChat
 from utils import normalize_phone
 from db import SessionLocal
 from typing import List
-from sqlalchemy.sql import func
 from config import SUPER_ADMIN_ID
 from datetime import datetime
+
+# --- Користувачі ---
 
 def get_user_by_telegram_id(db: Session, telegram_id: int):
     return db.query(TelegramUser).filter(TelegramUser.telegram_id == telegram_id).first()
@@ -32,17 +33,64 @@ def save_user(db: Session, telegram_id: int, phone: str, role="користув�
     db.refresh(user)
     return user
 
-# Функція is_attached_to_site ВИДАЛЕНА
+def is_manager(db: Session, telegram_id: int) -> bool:
+    if telegram_id == SUPER_ADMIN_ID:
+        return True
+    role = get_user_role(db, telegram_id)
+    return role in ["менеджер", "адмін", "старший адмін"]
 
-def save_message(client_id: int, sender: str, type_: str, text: str = None, file_id: str = None, manager_id: int = None, media_group_id: str = None):
-    db = SessionLocal()
+# --- Чати ---
+
+def get_support_chat_by_client_id(db: Session, client_id: int) -> SupportChat:
+    return db.query(SupportChat).filter(SupportChat.client_id == client_id).first()
+
+def assign_manager_to_chat(db: Session, client_id: int, manager_id: int) -> SupportChat:
+    chat = get_support_chat_by_client_id(db, client_id)
+    if chat:
+        chat.manager_id = manager_id
+        chat.status = "open"
+        chat.last_manager_message_at = datetime.utcnow()
+        db.commit()
+        db.refresh(chat)
+    return chat
+
+def close_support_chat(db: Session, client_id: int):
+    chat = get_support_chat_by_client_id(db, client_id)
+    if chat:
+        chat.status = "closed"
+        db.commit()
+        db.refresh(chat)
+
+def get_active_support_chats(db: Session) -> List[SupportChat]:
+    return db.query(SupportChat).filter(SupportChat.status != "closed").order_by(
+        SupportChat.last_client_message_at.desc()
+    ).all()
+
+# --- Повідомлення ---
+
+from datetime import datetime
+from sqlalchemy.orm import Session
+from db import SessionLocal
+from models import ChatMessage, SupportChat
+
+def save_message(
+    client_id: int,
+    sender: str,
+    type_: str,
+    text: str = None,
+    file_id: str = None,
+    manager_id: int = None,
+    media_group_id: str = None,
+    db: Session = None
+):
+    """Зберігає повідомлення та оновлює стан чату."""
+    close_session = False
+    if db is None:
+        db = SessionLocal()
+        close_session = True
+
     try:
-        print(f"\n📝 save_message викликано:")
-        print(f"   client_id={client_id}, sender={sender}, type={type_}")
-        print(f"   text={text[:50] if text else None}...")
-        print(f"   manager_id={manager_id}")
-        
-        # 1. Зберігаємо повідомлення
+        # --- Створюємо повідомлення ---
         msg = ChatMessage(
             client_id=client_id,
             manager_id=manager_id,
@@ -51,110 +99,55 @@ def save_message(client_id: int, sender: str, type_: str, text: str = None, file
             text=text,
             file_id=file_id,
             media_group_id=media_group_id,
-            created_at=datetime.utcnow()  # Явно встановлюємо час
+            created_at=datetime.utcnow()
         )
         db.add(msg)
-        db.flush()  # Отримуємо ID перед commit
-        
-        print(f"✅ Повідомлення додано в БД, ID={msg.id}, created_at={msg.created_at}")
 
-        # 2. Оновлюємо або створюємо SupportChat
+        # --- Отримуємо або створюємо чат ---
         chat = db.query(SupportChat).filter(SupportChat.client_id == client_id).first()
-        
+        now = datetime.utcnow()
+
         if sender == "client":
             if not chat:
-                print(f"🆕 Створюємо новий чат для клієнта {client_id}")
                 chat = SupportChat(
                     client_id=client_id,
                     status="awaiting_manager",
-                    last_client_message_at=datetime.utcnow()
+                    last_client_message_at=now
                 )
                 db.add(chat)
-            elif chat.status == "closed":
-                print(f"🔄 Відновлюємо закритий чат для клієнта {client_id}")
-                chat.status = "awaiting_manager"
-                chat.manager_id = None
-                chat.last_client_message_at = datetime.utcnow()
             else:
-                print(f"📊 Оновлюємо існуючий чат для клієнта {client_id}")
-                chat.last_client_message_at = datetime.utcnow()
-                
-        elif sender == "manager":
-            if chat:
-                print(f"💬 Менеджер {manager_id} відповідає в чат {client_id}")
-                chat.last_manager_message_at = datetime.utcnow()
-            else:
-                print(f"⚠️ УВАГА: Чат для клієнта {client_id} не знайдено!")
+                if chat.status == "closed":
+                    chat.status = "awaiting_manager"
+                    chat.manager_id = None
+                chat.last_client_message_at = now
+
+        elif sender == "manager" and chat:
+            chat.last_manager_message_at = now
 
         db.commit()
+
+        # Оновлюємо об’єкти після commit
         db.refresh(msg)
         if chat:
             db.refresh(chat)
-            
-        print(f"✅ Транзакція завершена успішна\n")
+
         return msg
-        
-    except Exception as e:
-        print(f"❌ ПОМИЛКА в save_message: {e}")
+
+    except Exception:
         db.rollback()
         raise
     finally:
-        db.close()
+        if close_session:
+            db.close()
 
-# ФУНКЦІЇ для керування чатами
+
+
+def get_chat_history(db: Session, client_id: int, limit: int = 50) -> List[ChatMessage]:
+    return db.query(ChatMessage).filter(
+        ChatMessage.client_id == client_id
+    ).order_by(ChatMessage.created_at.desc()).limit(limit).all()
+
+
 def get_manager_roles() -> List[str]:
     """Повертає список ролей, які можуть бути менеджерами підтримки."""
     return ["менеджер", "адмін", "старший адмін"]
-
-def is_manager(db: Session, telegram_id: int) -> bool:
-    """Перевіряє, чи є користувач менеджером, включаючи SUPER_ADMIN_ID."""
-    
-    if telegram_id == SUPER_ADMIN_ID:
-        return True
-        
-    user_role = get_user_role(db, telegram_id)
-    return user_role in get_manager_roles()
-
-def get_active_support_chats(db: Session) -> List[SupportChat]:
-    """Повертає список активних чатів (не закритих)."""
-    return db.query(SupportChat).filter(
-        SupportChat.status != "closed"
-    ).order_by(
-        SupportChat.last_client_message_at.desc()
-    ).all()
-
-def get_support_chat_by_client_id(db: Session, client_id: int) -> SupportChat:
-    """Знаходить SupportChat за ID клієнта."""
-    return db.query(SupportChat).filter(SupportChat.client_id == client_id).first()
-
-def assign_manager_to_chat(db: Session, client_id: int, manager_id: int) -> SupportChat:
-    """Призначає менеджера до чату і встановлює статус 'open'."""
-    chat = get_support_chat_by_client_id(db, client_id)
-    if chat:
-        print(f"👤 Призначаємо менеджера {manager_id} до чату {client_id}")
-        chat.manager_id = manager_id
-        chat.status = "open"
-        db.commit()
-        db.refresh(chat)
-        return chat
-    return None
-
-def close_support_chat(db: Session, client_id: int):
-    """Закриває чат підтримки."""
-    chat = get_support_chat_by_client_id(db, client_id)
-    if chat:
-        print(f"🚪 Закриваємо чат {client_id}")
-        chat.status = "closed"
-        db.commit()
-        db.refresh(chat)
-
-def get_chat_history(db: Session, client_id: int, limit: int = 50) -> List[ChatMessage]:
-    """Повертає історію повідомлень для клієнта."""
-    messages = db.query(ChatMessage).filter(
-        ChatMessage.client_id == client_id
-    ).order_by(
-        ChatMessage.created_at.desc()
-    ).limit(limit).all()
-    
-    print(f"📚 Завантажено {len(messages)} повідомлень для клієнта {client_id}")
-    return messages

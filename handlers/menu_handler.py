@@ -6,6 +6,7 @@ from telegram.ext import ContextTypes
 from keyboards import social_media_menu, main_menu
 from db import SessionLocal 
 from storage import is_manager 
+from config import SUPER_ADMIN_ID
 from handlers.support_handler import open_support_manager, start_support # <--- ДОДАНО start_support
 
 async def show_social_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
