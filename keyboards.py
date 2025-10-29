@@ -2,6 +2,8 @@ from telegram import ReplyKeyboardMarkup, InlineKeyboardMarkup, InlineKeyboardBu
 from storage import get_user_role
 from config import SUPER_ADMIN_ID, FACEBOOK_LINK, INSTAGRAM_LINK, TIKTOK_LINK
 from db import SessionLocal
+from telegram import ReplyKeyboardMarkup, KeyboardButton
+
 
 def main_menu(telegram_id):
     db = SessionLocal()
@@ -36,3 +38,9 @@ def social_media_menu():
         [InlineKeyboardButton("📱 TikTok", url=TIKTOK_LINK)]
     ]
     return InlineKeyboardMarkup(buttons)
+
+
+def client_support_menu():
+    """Клавіатура для клієнта під час активного чату підтримки."""
+    keyboard = [[KeyboardButton("❌ Закінчити чат")]]
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
