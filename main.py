@@ -17,10 +17,11 @@ def main():
     # --- ConversationHandler для старту ---
     conv_handler = ConversationHandler(
         entry_points=[
-            CommandHandler("start", start),
-            # ДОДАНО: Якщо бот не знає, що робити, він повертає користувача на старт.
-            # Це допомагає, коли стан втрачено, але /start не було надіслано.
-            MessageHandler(filters.ALL & ~filters.COMMAND, start)
+            # ВИДАЛЕННЯ: CommandHandler("start", start)
+            # ВИКОРИСТАННЯ: MessageHandler, який ловить ВСІ команди (включно з /start)
+            MessageHandler(filters.COMMAND, start), 
+            # Обробляє будь-який текст (вхідна точка, якщо розмова не активна)
+            MessageHandler(filters.TEXT & ~filters.COMMAND, start)
         ],
         states={
             ASK_PHONE: [
@@ -29,8 +30,7 @@ def main():
                 MessageHandler(filters.TEXT & ~filters.COMMAND, save_user_contact) 
             ],
             MAIN_MENU: [
-                # Додаємо всі основні кнопки меню до стану MAIN_MENU 
-                # для коректного виходу з ConversationHandler, якщо вони були натиснуті.
+                # Обробка всіх основних кнопок меню
                 MessageHandler(filters.Regex("🌐 Наші соцмережі"), show_social_media),
                 MessageHandler(filters.Regex("💬 Підтримка"), menu_handler),
                 MessageHandler(filters.Regex("❓ Часті питання"), menu_handler),
@@ -38,7 +38,8 @@ def main():
                 MessageHandler(filters.TEXT & ~filters.COMMAND, menu_handler)
             ],
         },
-        fallbacks=[],
+        # ДОДАНО: Fallback для коректної роботи /start як команди, якщо ConvH активний
+        fallbacks=[CommandHandler("start", start)],
         name="my_conversation",
         persistent=True
     )

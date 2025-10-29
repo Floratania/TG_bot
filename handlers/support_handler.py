@@ -244,19 +244,19 @@ async def notify_managers(context: ContextTypes.DEFAULT_TYPE, client_id: int, is
 # --- НОВА ФУНКЦІЯ: Примусове оновлення панелей всіх менеджерів ---
 async def refresh_manager_panels(context: ContextTypes.DEFAULT_TYPE):
     """Надсилає оновлення всім менеджерам, щоб оновити їхні панелі чатів."""
-    db = SessionLocal() #
+    db = SessionLocal()
     try:
         # Отримуємо всіх менеджерів (логіка з notify_managers)
         managers = db.query(TelegramUser).filter(
-            TelegramUser.role.in_(get_manager_roles()) #
+            TelegramUser.role.in_(get_manager_roles())
         ).all()
         targets = [m.telegram_id for m in managers]
         if SUPER_ADMIN_ID not in targets:
-            targets.append(SUPER_ADMIN_ID) #
+            targets.append(SUPER_ADMIN_ID)
             
         # Формуємо клавіатуру для переходу до панелі
         keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("🧑‍💻 Панель чатів", callback_data="support_refresh_list")] #
+            [InlineKeyboardButton("🧑‍💻 Панель чатів", callback_data="support_refresh_list")]
         ])
         
         message_text = "🔄 *Панель підтримки оновлено*.\n"
@@ -409,7 +409,9 @@ async def start_support(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return ConversationHandler.END # Невідомий вхід
 
     db = SessionLocal()
+    role = "користувач" # Роль за замовчуванням
     try:
+        # Захист від збою БД
         role = get_user_role(db, telegram_id)
         
         # Менеджери не можуть використовувати клієнтський чат
@@ -438,6 +440,10 @@ async def start_support(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "Щоб завершити чат, використовуйте /end_chat"
         )
         
+    except Exception as e:
+        print(f"ERROR in start_support for user {telegram_id}: {e}")
+        await update.message.reply_text("❌ Виникла технічна помилка. Спробуйте пізніше або зверніться до адміністратора.")
+        return ConversationHandler.END
     finally:
         db.close()
     
@@ -451,55 +457,27 @@ async def client_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.message
     
     # === ВИПРАВЛЕННЯ: Ігноруємо текст кнопки "Підтримка" після запуску розмови ===
-    # Тепер ця кнопка - entry_point, але якщо вона потрапляє сюди, ми її ігноруємо
+    # Якщо бот був перезапущений і стан втрачено, але користувач натискає кнопку
     if message.text == "💬 Підтримка":
-        if update.message:
-            telegram_id = update.message.from_user.id
-        elif update.callback_query:
-            telegram_id = update.callback_query.from_user.id
-        else:
-            return ConversationHandler.END # Невідомий вхід
-
-        db = SessionLocal()
-        try:
-            role = get_user_role(db, telegram_id)
-            
-            # Менеджери не можуть використовувати клієнтський чат
-            if role in get_manager_roles() or telegram_id == SUPER_ADMIN_ID:
-                # === ЗМІНА: Перенаправляємо менеджера на Панель підтримки ===
-                print(f"🔄 Менеджер {telegram_id} спробував /support, перенаправляємо на панель.")
-                return await open_support_manager(update, context) 
-                # =========================================================
-
-            # Перевіряємо чи є активний чат
-            chat = get_support_chat_by_client_id(db, telegram_id)
-            
-            if chat and chat.status != "closed":
-                # Якщо чат АКТИВНИЙ, повертаємо стан IN_CHAT та повідомлення
-                await update.message.reply_text(
-                    "💬 Ви вже в чаті підтримки. Надішліть своє повідомлення, і менеджер відповість.\n\n"
-                    "Щоб завершити чат, використовуйте /end_chat"
-                )
-                return IN_CHAT
-            
-            # Новий чат (або попередній був закритий)
-            await update.message.reply_text(
-                "💬 Вітаємо в чаті підтримки!\n\n"
-                "Напишіть своє питання, і наш менеджер зв'яжеться з вами найближчим часом.\n\n"
-                "Ви можете надсилати текст, фото, відео та документи.\n\n"
-                "Щоб завершити чат, використовуйте /end_chat"
-            )
-        finally:
-            db.close()
+        # Це має перенаправити на початок support_handler, де буде відновлено діалог
+        return await start_support(update, context)
     # =========================================================================
     
-    # Перевірка чи користувач є менеджером
+    # Перевірка чи користувач є менеджером (потрібна сесія БД)
+    is_mgr = False
     db_check = SessionLocal()
     try:
-        if is_manager(db_check, telegram_id):
-            return ConversationHandler.END
+        is_mgr = is_manager(db_check, telegram_id)
+    except Exception as e:
+        print(f"ERROR checking manager status for {telegram_id}: {e}")
+        # Якщо БД впала, краще завершити розмову, щоб не створювати некеровані повідомлення
+        return ConversationHandler.END
     finally:
         db_check.close()
+        
+    if is_mgr:
+        # Менеджери не повинні використовувати клієнтський чат
+        return ConversationHandler.END
     
     # Обробка команди завершення чату
     if message.text == "/end_chat":
@@ -539,6 +517,7 @@ async def client_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # Зберігаємо повідомлення
     db = SessionLocal()
+    new_msg = None
     try:
         # Перевіряємо статус чату
         chat = get_support_chat_by_client_id(db, telegram_id)
@@ -560,12 +539,16 @@ async def client_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "Щоб завершити чат, використовуйте /end_chat"
              )
         
+    except Exception as e:
+        print(f"FATAL ERROR in client_message save/reply for {telegram_id}: {e}")
+        await update.message.reply_text("❌ Виникла помилка при реєстрації вашого повідомлення. Спробуйте пізніше.")
+        return ConversationHandler.END # Завершуємо розмову при збої
     finally:
         db.close()
     
     # Сповіщаємо менеджерів
-    # Змінено: Передаємо new_msg
-    await notify_managers(context, telegram_id, is_new_chat, new_msg) 
+    if new_msg: # Сповіщаємо лише якщо повідомлення успішно збережено
+        await notify_managers(context, telegram_id, is_new_chat, new_msg) 
     
     return IN_CHAT
 
@@ -575,259 +558,73 @@ async def receive_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return await client_message(update, context)
 
 
-# --- ОБРОБНИКИ ДЛЯ МЕНЕДЖЕРА ---
-
-async def open_support_manager(update: Update, context: ContextTypes.DEFAULT_TYPE, is_callback=False):
-    """Відкриває панель чатів для менеджера."""
-    
-    if is_callback:
-        query = update.callback_query
-        telegram_id = query.from_user.id
-    else:
+async def open_support_manager(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Відкриває панель підтримки для менеджера."""
+    if update.message:
         telegram_id = update.message.from_user.id
+    elif update.callback_query:
+        telegram_id = update.callback_query.from_user.id
+    else:
+        return ConversationHandler.END
     
     db = SessionLocal()
     try:
-        # Перевірка доступу
+        # 1. Перевірка доступу
         if not is_manager(db, telegram_id):
-            text = "❌ Вам не дозволено використовувати цю функцію."
-            if is_callback:
-                await query.answer(text, show_alert=True)
-            else:
-                await update.message.reply_text(text)
+            if update.message:
+                await update.message.reply_text("⛔ Доступ заборонено.")
+            elif update.callback_query:
+                await update.callback_query.answer("⛔ Доступ заборонено.", show_alert=True)
             return ConversationHandler.END
-        
-        # Отримуємо активні чати
+            
+        # 2. Отримуємо список активних чатів
         chats = get_active_support_chats(db)
-        
-        # Формуємо повідомлення
-        if not chats:
-            text = "🧑‍💻 *ПАНЕЛЬ ПІДТРИМКИ*\n\n📭 Немає активних чатів."
-        else:
-            text = f"🧑‍💻 *ПАНЕЛЬ ПІДТРИМКИ*\n\n📊 Активних чатів: {len(chats)}\n\nОберіть чат:"
-        
         keyboard = get_chat_list_keyboard(chats, telegram_id, db)
         
-        if is_callback:
-            # === ВИПРАВЛЕННЯ: Додаємо перевірку перед edit_message_text ===
-            can_edit = query.message.text is not None or query.message.caption is not None
-            
-            if can_edit:
-                try: # <--- ВИПРАВЛЕННЯ: Додано обробку помилки "Message is not modified"
-                    await query.edit_message_text(
-                        text,
-                        reply_markup=keyboard,
-                        parse_mode=ParseMode.MARKDOWN
-                    )
-                except TelegramError as e:
-                    if "Message is not modified" in str(e):
-                        pass # Ігноруємо помилку, оскільки це просто оновлення без змін
-                    else:
-                        raise # Перенаправляємо інші помилки Telegram
-                
-            else:
-                # Fallback: Send a new message if the original message was media without caption
-                await context.bot.send_message(
-                    chat_id=telegram_id,
-                    text=text,
-                    reply_markup=keyboard,
-                    parse_mode=ParseMode.MARKDOWN
-                )
-                try:
-                    await query.edit_message_reply_markup(reply_markup=None)
-                except Exception as e:
-                    print(f"Error removing keyboard from message in open_support_manager: {e}")
-            # =============================================================
+        # 3. Надсилаємо повідомлення
+        text = "🧑‍💻 *ПАНЕЛЬ ПІДТРИМКИ*\n\n"
+        if chats:
+            text += f"Активні чати: {len(chats)}\nОберіть чат зі списку нижче."
         else:
+            text += "✅ Наразі активних чатів немає."
+            
+        if update.message:
             await update.message.reply_text(
                 text,
                 reply_markup=keyboard,
                 parse_mode=ParseMode.MARKDOWN
             )
-        
+        elif update.callback_query:
+            await update.callback_query.message.edit_text(
+                text,
+                reply_markup=keyboard,
+                parse_mode=ParseMode.MARKDOWN
+            )
+            await update.callback_query.answer()
+            
+    except Exception as e:
+        print(f"FATAL ERROR in open_support_manager for {telegram_id}: {e}")
+        if update.message:
+            await update.message.reply_text("❌ Виникла помилка при завантаженні панелі підтримки.")
+        elif update.callback_query:
+            await update.callback_query.answer("❌ Виникла помилка при завантаженні панелі підтримки.", show_alert=True)
+        return ConversationHandler.END
     finally:
         db.close()
-    
+        
     return MANAGER_STATE_SELECTING_CLIENT
 
 
-async def support_callback_query(update: Update, context: ContextTypes.DEFAULT_TYPE, is_global_entry=False):
-    """Обробляє натискання кнопок у панелі менеджера."""
-    query = update.callback_query
-    
-    if not is_global_entry:
-        await query.answer()
-    
-    data = query.data
-    manager_id = query.from_user.id
-    
-    db = SessionLocal()
-    try:
-        # Оновлення списку чатів
-        if data == "support_refresh_list":
-            return await open_support_manager(update, context, is_callback=True)
-            
-        # Отримання медіафайлів
-        elif data.startswith("support_get_media:"):
-            return await send_chat_media(update, context)
-        
-        # Вибір або перегляд чату
-        elif data.startswith("support_select:") or data.startswith("support_view:"):
-            client_id = int(data.split(":")[1])
-            
-            # Отримуємо чат
-            chat = get_support_chat_by_client_id(db, client_id)
-            if not chat:
-                await query.answer("❌ Чат не знайдено", show_alert=True)
-                return MANAGER_STATE_SELECTING_CLIENT
-            
-            # Якщо чат новий або призначений цьому менеджеру - призначаємо/відкриваємо
-            if chat.status == "awaiting_manager" or chat.manager_id == manager_id:
-                assign_manager_to_chat(db, client_id, manager_id)
-                context.user_data['current_client_chat_id'] = client_id
-            elif chat.manager_id and chat.manager_id != manager_id:
-                # Чат призначений іншому менеджеру
-                other_manager = db.query(TelegramUser).filter(
-                    TelegramUser.telegram_id == chat.manager_id
-                ).first()
-                other_name = other_manager.phone if other_manager and other_manager.phone else "іншому менеджеру"
-                await query.answer(
-                    f"⚠️ Цей чат веде {other_name}",
-                    show_alert=True
-                )
-                return MANAGER_STATE_SELECTING_CLIENT
-            
-            # Завантажуємо історію
-            history = get_chat_history(db, client_id, limit=100)
-            
-            # Отримуємо дані клієнта (ПЕРЕНЕСЕНО ВГОРУ)
-            client_user = db.query(TelegramUser).filter(
-                TelegramUser.telegram_id == client_id
-            ).first()
-            
-            client_display = client_user.phone if client_user and client_user.phone else f'ID: {client_id}'
-
-            # === ВИПРАВЛЕННЯ: Реверсуємо історію, щоб старіші повідомлення були зверху ===
-            history.reverse()
-            # ===========================================================================
-            
-            # Клавіатура чату (ДОДАНО КНОПКУ МЕДІА)
-            chat_keyboard = InlineKeyboardMarkup([
-                [InlineKeyboardButton("🚪 Закрити чат", callback_data=f"support_close:{client_id}")],
-                [InlineKeyboardButton("⬅️ Назад до списку", callback_data="support_refresh_list")],
-                [InlineKeyboardButton("🖼️ Отримати медіа", callback_data=f"support_get_media:{client_id}")]
-            ])
-            
-            # Показуємо чат
-            history_text = format_chat_history(history)
-
-            # 1. Determine the message text content for the new state
-            new_message_text = (
-                f"💬 *ЧАТ З КЛІЄНТОМ*\n\n"
-                f"👤 Клієнт: {client_display}\n"
-                f"🆔 ID: `{client_id}`\n\n"
-                f"{'─' * 30}\n\n"
-                f"{history_text}\n"
-                f"{'─' * 30}\n\n"
-                f"_Ви можете відповідати прямо в цей чат_"
-            )
-            
-            # 2. === ВИПРАВЛЕННЯ: Додаємо перевірку перед edit_message_text ===
-            can_edit = query.message.text is not None or query.message.caption is not None
-
-            if can_edit:
-                # Показуємо чат шляхом редагування (якщо це можливо)
-                await query.edit_message_text(
-                    new_message_text,
-                    reply_markup=chat_keyboard,
-                    parse_mode=ParseMode.MARKDOWN
-                )
-            else:
-                # Це було чисте медіа без підпису. Надсилаємо нове повідомлення
-                await context.bot.send_message(
-                    chat_id=manager_id,
-                    text=new_message_text,
-                    reply_markup=chat_keyboard,
-                    parse_mode=ParseMode.MARKDOWN
-                )
-                # Опціонально, видаляємо кнопки з оригінального повідомлення
-                try:
-                    await query.edit_message_reply_markup(reply_markup=None)
-                except Exception as e:
-                    print(f"Помилка при видаленні клавіатури з медіа-повідомлення: {e}")
-            # =================================================================
-            
-            return MANAGER_STATE_IN_CHAT
-        
-        # Закриття чату
-        elif data.startswith("support_close:"):
-            client_id = int(data.split(":")[1])
-            
-            # Очищаємо поточний чат
-            if context.user_data.get('current_client_chat_id') == client_id:
-                context.user_data['current_client_chat_id'] = None
-            
-            # Закриваємо чат
-            close_support_chat(db, client_id)
-            
-            # Сповіщаємо клієнта
-            try:
-                await context.bot.send_message(
-                    chat_id=client_id,
-                    text="✅ Ваш чат підтримки завершено менеджером.\n\n"
-                         "Дякуємо за звернення! Ви можете почати новий чат у будь-який час."
-                )
-            except:
-                pass
-            
-            await query.edit_message_text(
-                f"✅ Чат з клієнтом `{client_id}` закрито.",
-                reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("⬅️ Назад до списку", callback_data="support_refresh_list")]
-                ]),
-                parse_mode=ParseMode.MARKDOWN
-            )
-            
-            # Додано: Оновлюємо панелі ВСІХ менеджерів
-            await refresh_manager_panels(context) # <-- Додано
-            
-            return MANAGER_STATE_SELECTING_CLIENT
-    
-    finally:
-        db.close()
-    
-    return ConversationHandler.END
-
-
 async def manager_reply_to_client(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обробляє відповідь менеджера клієнту."""
-    
+    """Обробляє повідомлення менеджера в активному чаті."""
     manager_id = update.message.from_user.id
-    client_id = context.user_data.get('current_client_chat_id')
+    client_id = context.user_data.get('current_client_id')
     message = update.message
     
     if not client_id:
-        await update.message.reply_text(
-            "❌ Немає активного чату. Оберіть чат у панелі /support_manager"
-        )
-        return MANAGER_STATE_IN_CHAT
-    
-    # === НОВА ПЕРЕВІРКА: Чи активний чат? (Виконує вимогу "не дозволяй відпрвляти повідомлення") ===
-    db_check = SessionLocal()
-    try:
-        chat = get_support_chat_by_client_id(db_check, client_id)
-        if chat and chat.status == "closed":
-            await update.message.reply_text(
-                "❌ **Відправка неможлива**. Цей чат був закритий клієнтом або менеджером. "
-                "Будь ласка, оберіть інший чат у панелі /support_manager.",
-                parse_mode=ParseMode.MARKDOWN
-            )
-            # Якщо чат закритий, не дозволяємо подальші дії та залишаємось у стані
-            return MANAGER_STATE_IN_CHAT
-    finally:
-        db_check.close()
-    # ========================================
-
+        await update.message.reply_text("❌ Помилка: Не обрано активний чат. Поверніться до /support_manager.")
+        return MANAGER_STATE_SELECTING_CLIENT
+        
     # Визначаємо тип повідомлення
     message_type = "text"
     text = None
@@ -854,50 +651,232 @@ async def manager_reply_to_client(update: Update, context: ContextTypes.DEFAULT_
         text = message.text
     else:
         await update.message.reply_text(
-            "❗ Цей тип повідомлення не підтримується."
+            "❗ На жаль, цей тип повідомлення не підтримується для відправки клієнту."
         )
         return MANAGER_STATE_IN_CHAT
-    
+        
+    # Зберігаємо повідомлення в БД
+    db = SessionLocal()
     try:
         # Зберігаємо повідомлення
-        save_message(
+        new_msg = save_message(
             client_id=client_id,
             sender="manager",
-            manager_id=manager_id,
             type_=message_type,
             text=text,
             file_id=file_id
         )
-        
-        # Пересилаємо клієнту
-        await context.bot.copy_message(
-            chat_id=client_id,
-            from_chat_id=manager_id,
-            message_id=message.message_id
+
+        # 1. Надсилаємо повідомлення клієнту
+        await send_message_content(
+            context,
+            client_id,
+            new_msg,
+            parse_mode=ParseMode.MARKDOWN # Використовуємо MARKDOWN, якщо text/caption містить форматування
         )
-        
-        await update.message.reply_text(
-            f"✅ Повідомлення доставлено клієнту `{client_id}`",
-            parse_mode=ParseMode.MARKDOWN
-        )
+
+        # 2. Підтверджуємо менеджеру
+        if new_msg.type == 'text':
+            await update.message.reply_text("✅ Повідомлення відправлено клієнту.")
+        else:
+             await update.message.reply_text(f"✅ {message_type.upper()} відправлено клієнту.")
         
     except TelegramError as e:
-        error_msg = f"❌ Не вдалося доставити повідомлення клієнту `{client_id}`\n\nМожлива причина: клієнт заблокував бота"
-        await update.message.reply_text(error_msg, parse_mode=ParseMode.MARKDOWN)
-        print(f"Telegram error: {e}")
-        
+        await update.message.reply_text(f"❌ Помилка при відправці повідомлення клієнту: {e}")
+        print(f"Telegram ERROR in manager_reply_to_client: {e}")
     except Exception as e:
-        error_msg = f"❌ Помилка при відправці: {e}"
-        await update.message.reply_text(error_msg)
-        print(f"Error: {e}")
-    
+        await update.message.reply_text(f"❌ Виникла помилка: {e}")
+        print(f"FATAL ERROR in manager_reply_to_client: {e}")
+    finally:
+        db.close()
+        
     return MANAGER_STATE_IN_CHAT
 
+
+async def support_callback_query(update: Update, context: ContextTypes.DEFAULT_TYPE, is_global_entry: bool = False):
+    """Обробляє натискання кнопок в панелі підтримки та сповіщеннях."""
+    query = update.callback_query
+    data = query.data
+    manager_id = query.from_user.id
+    
+    # Якщо це не глобальний вхід, відповідаємо на запит
+    if not is_global_entry:
+        await query.answer()
+
+    db = SessionLocal()
+    try:
+        if not is_manager(db, manager_id):
+            await query.message.reply_text("⛔ Доступ заборонено.")
+            return ConversationHandler.END
+
+        # --- Кнопка "Оновити список" ---
+        if data == "support_refresh_list":
+            # 1. Отримуємо список
+            chats = get_active_support_chats(db)
+            keyboard = get_chat_list_keyboard(chats, manager_id, db)
+            
+            # 2. Оновлюємо повідомлення
+            text = "🧑‍💻 *ПАНЕЛЬ ПІДТРИМКИ*\n\n"
+            if chats:
+                text += f"Активні чати: {len(chats)}\nОберіть чат зі списку нижче."
+            else:
+                text += "✅ Наразі активних чатів немає."
+            
+            await query.message.edit_text(
+                text,
+                reply_markup=keyboard,
+                parse_mode=ParseMode.MARKDOWN
+            )
+            return MANAGER_STATE_SELECTING_CLIENT
+
+
+        # --- Кнопка "Відкрити/Обрати чат" ---
+        elif data.startswith("support_select:"):
+            client_id = int(data.split(":")[1])
+            
+            # 1. Призначаємо чат менеджеру
+            chat = assign_manager_to_chat(db, client_id, manager_id)
+            
+            if not chat:
+                 await query.message.edit_text("❌ Помилка: Чат вже закритий або не існує.")
+                 return MANAGER_STATE_SELECTING_CLIENT
+            
+            # Зберігаємо ID клієнта в контексті
+            context.user_data['current_client_id'] = client_id
+
+            # 2. Відображаємо історію
+            messages = get_chat_history(db, client_id)
+            messages.reverse() # <--- Реверсуємо, щоб старіші були зверху
+            history_text = format_chat_history(messages)
+            
+            # 3. Клавіатура для активного чату
+            chat_keyboard = InlineKeyboardMarkup([
+                [InlineKeyboardButton("⬇️ Завантажити медіа", callback_data=f"support_get_media:{client_id}")],
+                [InlineKeyboardButton("❌ Закрити чат", callback_data=f"support_close:{client_id}")],
+                [InlineKeyboardButton("⬅️ Назад до списку", callback_data="support_refresh_list")]
+            ])
+
+            client_user = db.query(TelegramUser).filter(TelegramUser.telegram_id == client_id).first()
+            client_info = client_user.phone if client_user and client_user.phone else str(client_id)
+            
+            await query.message.edit_text(
+                f"🟢 *АКТИВНИЙ ЧАТ*\n\n"
+                f"Клієнт: {client_info}\nID: `{client_id}`\n"
+                f"--------------------------------------\n"
+                f"{history_text}",
+                reply_markup=chat_keyboard,
+                parse_mode=ParseMode.MARKDOWN
+            )
+            
+            # 4. Сповіщаємо клієнта, що менеджер на зв'язку
+            try:
+                manager_name = query.from_user.full_name
+                await context.bot.send_message(
+                    chat_id=client_id,
+                    text=f"✅ Менеджер *{manager_name}* прийняв ваш запит і на зв'язку.\nНапишіть своє повідомлення.",
+                    parse_mode=ParseMode.MARKDOWN
+                )
+            except Exception as e:
+                print(f"Помилка при сповіщенні клієнта {client_id}: {e}")
+
+            return MANAGER_STATE_IN_CHAT
+            
+        # --- Кнопка "Переглянути чат" (View) ---
+        elif data.startswith("support_view:"):
+            client_id = int(data.split(":")[1])
+            
+            # Зберігаємо ID клієнта в контексті
+            context.user_data['current_client_id'] = client_id
+            
+            # 1. Відображаємо історію
+            messages = get_chat_history(db, client_id)
+            messages.reverse() # <--- Реверсуємо, щоб старіші були зверху
+            history_text = format_chat_history(messages)
+            
+            # 2. Клавіатура для активного чату
+            chat_keyboard = InlineKeyboardMarkup([
+                [InlineKeyboardButton("⬇️ Завантажити медіа", callback_data=f"support_get_media:{client_id}")],
+                [InlineKeyboardButton("❌ Закрити чат", callback_data=f"support_close:{client_id}")],
+                [InlineKeyboardButton("⬅️ Назад до списку", callback_data="support_refresh_list")]
+            ])
+            
+            client_user = db.query(TelegramUser).filter(TelegramUser.telegram_id == client_id).first()
+            client_info = client_user.phone if client_user and client_user.phone else str(client_id)
+
+            await query.message.edit_text(
+                f"🟢 *АКТИВНИЙ ЧАТ*\n\n"
+                f"Клієнт: {client_info}\nID: `{client_id}`\n"
+                f"--------------------------------------\n"
+                f"{history_text}",
+                reply_markup=chat_keyboard,
+                parse_mode=ParseMode.MARKDOWN
+            )
+            return MANAGER_STATE_IN_CHAT
+            
+        # --- Кнопка "Закрити чат" ---
+        elif data.startswith("support_close:"):
+            client_id = int(data.split(":")[1])
+            
+            # 1. Закриваємо чат у БД
+            close_support_chat(db, client_id)
+            context.user_data['current_client_id'] = None
+            
+            # 2. Сповіщаємо клієнта
+            try:
+                await context.bot.send_message(
+                    chat_id=client_id,
+                    text="👋 Ваш чат підтримки було закрито менеджером.\n"
+                         "Ви можете розпочати новий запит за допомогою /support.",
+                )
+            except Exception as e:
+                print(f"Помилка при сповіщенні клієнта {client_id} про закриття: {e}")
+                
+            # 3. Оновлюємо панель для менеджера, який закрив чат
+            chats = get_active_support_chats(db)
+            keyboard = get_chat_list_keyboard(chats, manager_id, db)
+            
+            text = "🧑‍💻 *ПАНЕЛЬ ПІДТРИМКИ*\n\n"
+            text += f"✅ Чат з клієнтом `{client_id}` успішно закрито.\n\n"
+            if chats:
+                text += f"Активні чати: {len(chats)}\nОберіть чат зі списку нижче."
+            else:
+                text += "✅ Наразі активних чатів немає."
+                
+            await query.message.edit_text(
+                text,
+                reply_markup=keyboard,
+                parse_mode=ParseMode.MARKDOWN
+            )
+            
+            # 4. Оновлюємо панелі ВСІХ менеджерів
+            await refresh_manager_panels(context)
+            
+            return MANAGER_STATE_SELECTING_CLIENT
+
+        # --- Кнопка "Завантажити медіа" ---
+        elif data.startswith("support_get_media:"):
+            # Викликаємо новий обробник для медіа
+            await send_chat_media(update, context)
+            # Залишаємося у стані MANAGER_STATE_IN_CHAT
+            return MANAGER_STATE_IN_CHAT
+
+    except Exception as e:
+        print(f"FATAL ERROR in support_callback_query: {e}")
+        await query.answer("❌ Виникла помилка при обробці запиту.", show_alert=True)
+        return MANAGER_STATE_SELECTING_CLIENT # Повертаємося до безпечного стану
+    finally:
+        db.close()
+    
+    # Fallback: Якщо не вдалося обробити, повертаємося до вибору
+    return MANAGER_STATE_SELECTING_CLIENT
+    
+# --- Глобальний обробник сповіщень ---
 async def handle_notification_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Глобальний обробник для кнопок зі сповіщень."""
     query = update.callback_query
     await query.answer()
     
+    # Перенаправляємо на support_callback_query, щоб відкрити чат
     return await support_callback_query(update, context, is_global_entry=True)
 
 
@@ -909,6 +888,8 @@ def get_support_handler():
     client_handler = ConversationHandler(
         entry_points=[
             CommandHandler("support", start_support),
+            # Використовуємо MessageHandler, оскільки filters.Regex("💬 Підтримка")
+            # вже обробляється у menu_handler (в main.py)
             MessageHandler(filters.Regex("^💬 Підтримка$"), start_support) 
         ],
         states={

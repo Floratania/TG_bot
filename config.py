@@ -17,11 +17,7 @@ DATABASE_URL = f"mysql+pymysql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 BROADCAST_FILES_DIR = os.path.join(BASE_DIR, "files/broadcast")
 
-# BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-# EXCEL_FILE = os.path.join(BASE_DIR, "storage.xlsx")
-# BROADCAST_FILES_DIR = os.path.join(BASE_DIR, "files/broadcast")
 
 FACEBOOK_LINK = "https://www.facebook.com/vsmarketua"
 INSTAGRAM_LINK = "https://www.instagram.com/vsmarket.ua/"
-# VIBER_LINK = "https://invite.viber.com/..."
 TIKTOK_LINK = "https://www.tiktok.com/@vsmarket.ua"

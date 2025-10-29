@@ -32,13 +32,7 @@ def save_user(db: Session, telegram_id: int, phone: str, role="користув�
     db.refresh(user)
     return user
 
-def is_attached_to_site(telegram_id: int) -> bool:
-    db = SessionLocal()
-    try:
-        user = db.query(TelegramUser).filter(TelegramUser.telegram_id == telegram_id).first()
-        return bool(user and user.user_id)
-    finally:
-        db.close()
+# Функція is_attached_to_site ВИДАЛЕНА
 
 def save_message(client_id: int, sender: str, type_: str, text: str = None, file_id: str = None, manager_id: int = None, media_group_id: str = None):
     db = SessionLocal()
@@ -97,7 +91,7 @@ def save_message(client_id: int, sender: str, type_: str, text: str = None, file
         if chat:
             db.refresh(chat)
             
-        print(f"✅ Транзакція завершена успішно\n")
+        print(f"✅ Транзакція завершена успішна\n")
         return msg
         
     except Exception as e:

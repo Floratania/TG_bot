@@ -6,7 +6,7 @@ from telegram.ext import ContextTypes
 from keyboards import social_media_menu, main_menu
 from db import SessionLocal 
 from storage import is_manager 
-from handlers.support_handler import open_support_manager 
+from handlers.support_handler import open_support_manager, start_support # <--- ДОДАНО start_support
 
 async def show_social_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Показує меню соцмереж при натисканні кнопки."""
@@ -31,6 +31,9 @@ async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     db = SessionLocal()
     try:
         is_mgr = is_manager(db, telegram_id)
+    except Exception as e:
+        print(f"ERROR in menu_handler check is_manager: {e}")
+        is_mgr = False # Використовуємо роль за замовчуванням при збої
     finally:
         db.close()
 
@@ -46,20 +49,20 @@ async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # Для менеджера: відкриваємо панель чатів
             await open_support_manager(update, context)
         else:
-            # Для клієнта: відправляємо команду /support. ConversationHandler підхопить її.
-            await update.message.reply_text("/support") 
-            # Після цієї команди клієнт увійде в інший ConversationHandler
-            return # ВИХОДИМО, щоб не відправляти меню двічі
+            # === ВИПРАВЛЕННЯ: Викликаємо start_support напряму ===
+            # Це дозволяє ConvH підхопити стан і повернути IN_CHAT, 
+            # або перейти в ASK_QUESTION.
+            await start_support(update, context)
+            # Оскільки start_support повертає стан ConversationHandler, 
+            # ми повертаємося тут, щоб не порушити логіку ConvH.
+            return 
         action_performed = True
         
     elif text == "❓ Часті питання":
         await update.message.reply_text("❓ Тут будуть часті питання...")
         action_performed = True
         
-    # Кнопки "🛒 Мої замовлення" та "➕ Зробити замовлення" ВИЛУЧЕНІ.
-    
-    # --- ВИРІШЕННЯ ПРОБЛЕМИ: ПОВЕРНЕННЯ КЛАВІАТУРИ ---
-    # Якщо було виконано дію, ми повторно надсилаємо клавіатуру.
+    # --- ЛОГІКА ПОВЕРНЕННЯ КЛАВІАТУРИ ---
     if action_performed:
         # Надсилаємо клавіатуру, щоб вона "залишилася" внизу екрана
         await update.message.reply_text(
