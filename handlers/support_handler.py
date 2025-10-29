@@ -241,6 +241,42 @@ async def notify_managers(context: ContextTypes.DEFAULT_TYPE, client_id: int, is
     finally:
         db.close()
 
+# --- НОВА ФУНКЦІЯ: Примусове оновлення панелей всіх менеджерів ---
+async def refresh_manager_panels(context: ContextTypes.DEFAULT_TYPE):
+    """Надсилає оновлення всім менеджерам, щоб оновити їхні панелі чатів."""
+    db = SessionLocal() #
+    try:
+        # Отримуємо всіх менеджерів (логіка з notify_managers)
+        managers = db.query(TelegramUser).filter(
+            TelegramUser.role.in_(get_manager_roles()) #
+        ).all()
+        targets = [m.telegram_id for m in managers]
+        if SUPER_ADMIN_ID not in targets:
+            targets.append(SUPER_ADMIN_ID) #
+            
+        # Формуємо клавіатуру для переходу до панелі
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🧑‍💻 Панель чатів", callback_data="support_refresh_list")] #
+        ])
+        
+        message_text = "🔄 *Панель підтримки оновлено*.\n"
+        
+        for target_id in targets:
+            try:
+                # Надсилаємо сповіщення
+                await context.bot.send_message(
+                    chat_id=target_id,
+                    text=message_text,
+                    reply_markup=keyboard,
+                    parse_mode=ParseMode.MARKDOWN
+                )
+            except Exception as e:
+                print(f"Помилка при відправці оновлення панелі менеджеру {target_id}: {e}")
+
+    finally:
+        db.close()
+# ---------------------------------------------------------------------------------
+
 
 def get_chat_list_keyboard(chats: List[SupportChat], manager_id: int, db: SessionLocal) -> InlineKeyboardMarkup:
     """Створює клавіатуру зі списком активних чатів для менеджера."""
@@ -335,7 +371,7 @@ async def close_chat_by_client(update: Update, context: ContextTypes.DEFAULT_TYP
     finally:
         db.close()
     
-    # 4. Надсилаємо сповіщення менеджеру (поза транзакцією)
+    # 4. Надсилаємо сповіщення відповідальному менеджеру (поза транзакцією)
     if manager_to_notify:
         user = update.message.from_user
         # Використовуємо більш повну інформацію про клієнта
@@ -348,11 +384,15 @@ async def close_chat_by_client(update: Update, context: ContextTypes.DEFAULT_TYP
                 chat_id=manager_to_notify,
                 text=f"🚪 *Чат закрито клієнтом*.\n\n"
                      f"Клієнт: {client_info}\nID: `{telegram_id}`\n\n"
-                     f"Чат був закритий користувачем за допомогою команди /end_chat.",
+                     f"Чат був закритий користувачем за допомогою команди /end_chat.\n"
+                     f"🔄 _Вашу панель підтримки було оновлено автоматично._", # <-- Змінено
                 parse_mode=ParseMode.MARKDOWN
             )
         except Exception as e:
             print(f"Помилка при відправці сповіщення про закриття чату менеджеру {manager_to_notify}: {e}")
+            
+    # 5. Оновлюємо панелі ВСІХ менеджерів (виконання вимоги користувача)
+    await refresh_manager_panels(context) # <-- Додано
             
     return ConversationHandler.END
 
@@ -516,7 +556,8 @@ async def client_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Підтверджуємо отримання
         if not (message.photo or message.video or message.document or message.voice): # Не дублюємо відповідь під медіа
              await update.message.reply_text(
-                "✅ Повідомлення отримано. Менеджер незабаром з вами зв'яжеться."
+                "✅ Повідомлення отримано. Менеджер незабаром з вами зв'яжеться.\n"
+                "Щоб завершити чат, використовуйте /end_chat"
              )
         
     finally:
@@ -747,6 +788,9 @@ async def support_callback_query(update: Update, context: ContextTypes.DEFAULT_T
                 parse_mode=ParseMode.MARKDOWN
             )
             
+            # Додано: Оновлюємо панелі ВСІХ менеджерів
+            await refresh_manager_panels(context) # <-- Додано
+            
             return MANAGER_STATE_SELECTING_CLIENT
     
     finally:
@@ -768,7 +812,7 @@ async def manager_reply_to_client(update: Update, context: ContextTypes.DEFAULT_
         )
         return MANAGER_STATE_IN_CHAT
     
-    # === НОВА ПЕРЕВІРКА: Чи активний чат? ===
+    # === НОВА ПЕРЕВІРКА: Чи активний чат? (Виконує вимогу "не дозволяй відпрвляти повідомлення") ===
     db_check = SessionLocal()
     try:
         chat = get_support_chat_by_client_id(db_check, client_id)
